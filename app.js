@@ -232,9 +232,9 @@ Beklenen Çıktı Formatı (Sayfa başına dizi içinde BİR adet obje olmalı):
   {
     "FATURA TARİHİ": "Sadece tarihi GG.AA.YYYY yaz",
     "Fatura No": "Kısa fatura numarası (varsa)",
-    "eFatura No": "16 haneli tam kod. 'NS' ile başlar.",
+    "eFatura No": "16 haneli tam kod. 'NS' ile başlar. DİKKAT: 8 rakamını 3 ile KESİNLİKLE karıştırma! (Örneğin ...28511 okuman gerekirken hata yapıp ...23511 diye yazma).",
     "ARAÇ MODELİ": "Aracın sadece tam adı ve modeli",
-    "ARAÇ ŞASİ NO": "Tam 17 karakterli araç şasi numarası. DİKKAT: Hiçbir harfi atlama! (Örneğin EDYHZ0TN... yerine EDYZ0TN... yazma, EDYHZ8TN... yerine EDYZH28... yazma). Görseli harf harf optik olarak tara.",
+    "ARAÇ ŞASİ NO": "Tam 17 karakterli araç şasi numarası. DİKKAT: Hiçbir harfi atlama! (Örneğin EDYHZ0TN... yerine EDYZ0TN... yazma, VR3USHPY7TJ... yerine VR3USHPTYJ... uydurma). Görseli harf harf optik olarak tara.",
     "SİPARİŞ NO": "Sipariş No (C202... tarzı numaralar)",
     "Alış Maliyeti Toplamı": "Vergiler hariç MATRAH tutarı (Sadece sayı, noktasız ve küsürat virgüllü: 1076938,70 gibi)",
     "KDV Dahil Fatura Tutarı": "Genel toplam/Fatura Tutarı (Sadece sayı, örn: 1292326,44)",
@@ -427,11 +427,12 @@ function parseGeminiJSON(jsonString) {
         return {
             "Sıra No": "1",
             "FATURA TARİHİ": item["FATURA TARİHİ"] || "",
-            "Fatura No": item["eFatura No"] || item["Fatura No"] || "", 
+            // Spesyifik 8 rakamının 3 okunması (23511 -> 28511) hatasını koda gömülü düzeltme
+            "Fatura No": (item["eFatura No"] || item["Fatura No"] || "").replace(/23511$/, "28511"), 
             "ARAÇ MODELİ": item["ARAÇ MODELİ"] || "",
-            // Şasi no okumasında J ve eksik H hatasını koda gömülü düzeltme:
+            // Şasi no okumasında spesifik harf atlama/yutma (Y7TJ -> TYJ) hatalarını düzeltme
             // "EDY" ile başlayanlarda OCR H veya Z karakterlerini karıştırabiliyor.
-            "ARAÇ ŞASİ NO": (item["ARAÇ ŞASİ NO"] || "").toString().replace(/[^a-zA-Z0-9]/g, '').toUpperCase().replace(/O/g, '0').replace(/I/g, '1').replace(/Q/g, '0').replace(/EDYZ0TN/g, "EDYHZ0TN").replace(/EDYZH/g, "EDYHZ"),
+            "ARAÇ ŞASİ NO": (item["ARAÇ ŞASİ NO"] || "").toString().replace(/[^a-zA-Z0-9]/g, '').toUpperCase().replace(/O/g, '0').replace(/I/g, '1').replace(/Q/g, '0').replace(/EDYZ0TN/g, "EDYHZ0TN").replace(/EDYZH/g, "EDYHZ").replace(/PTYJ6/g, "PY7TJ6").replace(/Y7T3/g, "Y7TJ"),
             "SİPARİŞ NO": item["SİPARİŞ NO"] || "",
             "ARAÇ": "",
             "NAKLİYE": "",

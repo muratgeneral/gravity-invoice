@@ -176,14 +176,11 @@ async function processPDFPagesToInvoices(file, fileIndex, totalFiles, currentRow
 
     processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Toplam ${pdf.numPages} sayfa hazırlanıyor...`;
 
-    // Bütün sayfaları tek bir dizide toplayacağız
-    const base64Images = [];
-
     for (let i = 1; i <= pdf.numPages; i++) {
         processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} görsele çevriliyor...`;
         const page = await pdf.getPage(i);
 
-        const viewport = page.getViewport({ scale: 2.0 });
+        const viewport = page.getViewport({ scale: 2.5 });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         canvas.height = viewport.height;
@@ -194,43 +191,50 @@ async function processPDFPagesToInvoices(file, fileIndex, totalFiles, currentRow
             viewport: viewport
         }).promise;
 
-        base64Images.push(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+        const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+        // Her sayfayı ayrı ayrı göndererek diğer sayfaların şasilerinin ezberlenmesini (halüsinasyonu) önlüyoruz
+        processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} Yapay Zeka'ya okutuluyor...`;
+        const extractedJsonString = await callGeminiAPI([base64]);
+
+        // Log to raw text view for debugging
+        rawTextDisplay.innerHTML += `\n--- START ${file.name} (Sayfa ${i}) ---\n${extractedJsonString}\n--- END ${file.name} (Sayfa ${i}) ---\n`;
+
+        // Parse JSON safely
+        const parsedDataArray = parseGeminiJSON(extractedJsonString);
+
+        parsedDataArray.forEach(parsedData => {
+            parsedData["Sıra No"] = currentRowIndex;
+            currentExtractedData.push(parsedData);
+            displayRowResult(parsedData);
+            currentRowIndex++;
+        });
+
+        // Sayfalar arasında kotayı (429 Too Many Requests) doldurmamak için küçük molalar ver
+        if (i < pdf.numPages) {
+            processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} okundu. API Molası (3sn)...`;
+            await sleep(3000);
+        }
     }
-
-    // Call Gemini API once for ALL pages in this PDF
-    processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Tüm ${pdf.numPages} sayfa tek seferde Yapay Zeka'ya gönderiliyor...`;
-    const extractedJsonString = await callGeminiAPI(base64Images);
-
-    // Log to raw text view for debugging
-    rawTextDisplay.innerHTML += `\n--- START ${file.name} (Tüm Sayfalar Toplu) ---\n${extractedJsonString}\n--- END ${file.name} ---\n`;
-
-    // Parse JSON safely (şimdi bize bir Dizi(Array) gelecek)
-    const parsedDataArray = parseGeminiJSON(extractedJsonString);
-
-    parsedDataArray.forEach(parsedData => {
-        parsedData["Sıra No"] = currentRowIndex;
-        currentExtractedData.push(parsedData);
-        displayRowResult(parsedData);
-        currentRowIndex++;
-    });
 
     return currentRowIndex;
 }
 
 async function callGeminiAPI(base64ImagesArray) {
     const prompt = `Sen uzman bir fatura veri çıkarıcı yapay zekasın.
-Girdi olarak tek bir seferde BİRDEN FAZLA fatura sayfası görüntüsü alacaksın.
-Senin görevin her bir görsel sayfasındaki verileri tek tek okuyup, bunları bir JSON JSON DİZİSİ (Array) içerisinde döndürmek.
+Girdi olarak BİR ADET fatura sayfası görüntüsü alacaksın.
+Senin görevin bu görseldeki verileri DİKKATLİCE VE HARF HARF okuyup, bunları bir JSON DİZİSİ (Array) içerisinde döndürmek.
+DİKKAT: Gizli mantık veya tahmin (halüsinasyon) yürütme! Görselden tam olarak ne okuyorsan onu yaz, harf yutma veya baştan harf atma.
 Eksiksiz ve birebir aynı formatta çıkararak cevap vermelisin. 
 Hiçbir ekstra metin, açıklama veya markdown satırı ekleme; DOĞRUDAN geçerli bir JSON DİZİSİ (Array) objesi olarak cevap ver. Asla \`\`\`json blokları kullanma.
-Beklenen Çıktı Formatı (Sayfa sayısı kaç ise, dizi içinde o kadar obje olmalı):
+Beklenen Çıktı Formatı (Sayfa başına dizi içinde BİR adet obje olmalı):
 [
   {
-    "FATURA TARİHİ": "Sadece tarihi GG.AA.YYYY yaz (Ödeme tarihini alma)",
+    "FATURA TARİHİ": "Sadece tarihi GG.AA.YYYY yaz",
     "Fatura No": "Kısa fatura numarası (varsa)",
-    "eFatura No": "Genellikle 3 harf (INS, E53 vb.) ve 13 rakamdan oluşan 16 haneli tam kod",
-    "ARAÇ MODELİ": "Aracın sadece tam adı ve modeli (Motor no, gümrük kodu veya ETTN şifrelerini alma)",
-    "ARAÇ ŞASİ NO": "17 haneli şasi numarası (VR7, vs ile başlar. I ve O yerine 1 ve 0 lara dikkat et)",
+    "eFatura No": "16 haneli tam kod. 'NS' ile başlar.",
+    "ARAÇ MODELİ": "Aracın sadece tam adı ve modeli",
+    "ARAÇ ŞASİ NO": "Tam 17 karakterli araç şasi numarası. DİKKAT: Hiçbir harfi atlama! (Örneğin EDYHZ0TN... yerine EDYZ0TN... yazma, EDYHZ8TN... yerine EDYZH28... yazma). Görseli harf harf optik olarak tara.",
     "SİPARİŞ NO": "Sipariş No (C202... tarzı numaralar)",
     "Alış Maliyeti Toplamı": "Vergiler hariç MATRAH tutarı (Sadece sayı, noktasız ve küsürat virgüllü: 1076938,70 gibi)",
     "KDV Dahil Fatura Tutarı": "Genel toplam/Fatura Tutarı (Sadece sayı, örn: 1292326,44)",
@@ -423,9 +427,11 @@ function parseGeminiJSON(jsonString) {
         return {
             "Sıra No": "1",
             "FATURA TARİHİ": item["FATURA TARİHİ"] || "",
-            "Fatura No": item["eFatura No"] || item["Fatura No"] || "", // Prioritize 16 digit one
+            "Fatura No": item["eFatura No"] || item["Fatura No"] || "", 
             "ARAÇ MODELİ": item["ARAÇ MODELİ"] || "",
-            "ARAÇ ŞASİ NO": item["ARAÇ ŞASİ NO"] || "",
+            // Şasi no okumasında J ve eksik H hatasını koda gömülü düzeltme:
+            // "EDY" ile başlayanlarda OCR H veya Z karakterlerini karıştırabiliyor.
+            "ARAÇ ŞASİ NO": (item["ARAÇ ŞASİ NO"] || "").toString().replace(/[^a-zA-Z0-9]/g, '').toUpperCase().replace(/O/g, '0').replace(/I/g, '1').replace(/Q/g, '0').replace(/EDYZ0TN/g, "EDYHZ0TN").replace(/EDYZH/g, "EDYHZ"),
             "SİPARİŞ NO": item["SİPARİŞ NO"] || "",
             "ARAÇ": "",
             "NAKLİYE": "",

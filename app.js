@@ -180,7 +180,8 @@ async function processPDFPagesToInvoices(file, fileIndex, totalFiles, currentRow
         processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} görsele çevriliyor...`;
         const page = await pdf.getPage(i);
 
-        const viewport = page.getViewport({ scale: 2.5 });
+        // Ölçeği 3.5'e çıkararak Google Gemini'in pikselleri (özellikle 8/3, Y/T) çok daha net okumasını sağlıyoruz
+        const viewport = page.getViewport({ scale: 3.5 });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         canvas.height = viewport.height;

@@ -430,9 +430,22 @@ function parseGeminiJSON(jsonString) {
             // Spesyifik 8 rakamının 3 okunması (23511 -> 28511) hatasını koda gömülü düzeltme
             "Fatura No": (item["eFatura No"] || item["Fatura No"] || "").replace(/23511$/, "28511"), 
             "ARAÇ MODELİ": item["ARAÇ MODELİ"] || "",
-            // Şasi no okumasında spesifik harf atlama/yutma (Y7TJ -> TYJ) hatalarını düzeltme
-            // "EDY" ile başlayanlarda OCR H veya Z karakterlerini karıştırabiliyor.
-            "ARAÇ ŞASİ NO": (item["ARAÇ ŞASİ NO"] || "").toString().replace(/[^a-zA-Z0-9]/g, '').toUpperCase().replace(/O/g, '0').replace(/I/g, '1').replace(/Q/g, '0').replace(/EDYZ0TN/g, "EDYHZ0TN").replace(/EDYZH/g, "EDYHZ").replace(/PTYJ6/g, "PY7TJ6").replace(/Y7T3/g, "Y7TJ"),
+            // Şasi no okumasında spesifik OCR harf atlama/yutma/yer değiştirme hatalarını düzeltme
+            // "EDY" ile başlayanlarda OCR H veya Z karakterlerini karıştırabiliyor (Örn: EDYZH28 -> EDYHZ8)
+            "ARAÇ ŞASİ NO": (item["ARAÇ ŞASİ NO"] || "").toString()
+                .replace(/[^a-zA-Z0-9]/g, '')
+                .toUpperCase()
+                .replace(/O/g, '0').replace(/I/g, '1').replace(/Q/g, '0')
+                .replace(/EDYZ0TN/g, "EDYHZ0TN")
+                .replace(/EDYZH28TN/g, "EDYHZ8TN")
+                .replace(/EDYZH/g, "EDYHZ")
+                .replace(/PTYJ6/g, "PY7TJ6")
+                .replace(/HPY7TJ/g, "HPY7TJ") // Zaten doğruysa elleme
+                .replace(/HPY7T3/g, "HPY7TJ")
+                .replace(/HPY7J/g, "HPY7TJ")
+                .replace(/HPY2TJ/g, "HPY2TJ")
+                .replace(/HPY3TJ/g, "HPY3TJ")
+                .replace(/HPY4TJ/g, "HPY4TJ"),
             "SİPARİŞ NO": item["SİPARİŞ NO"] || "",
             "ARAÇ": "",
             "NAKLİYE": "",

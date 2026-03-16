@@ -17,9 +17,21 @@ const settingsModal = document.getElementById('settings-modal');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 
+// Viewer UI Elements
+const viewerModal = document.getElementById('viewer-modal');
+const closeViewerBtn = document.getElementById('close-viewer-btn');
+const viewerContent = document.getElementById('viewer-content');
+
 // System Settings State
 let geminiApiKey = localStorage.getItem('gemini_api_key') || '';
 let excelNumberFormat = localStorage.getItem('excel_number_format') || 'auto';
+
+// IndexedDB Initialization
+const db = localforage.createInstance({
+    name: "GravityInvoiceDB",
+    storeName: "invoices",
+    description: "Yerel Fatura Arşivi"
+});
 
 if (apiKeyInput) {
     apiKeyInput.value = geminiApiKey;
@@ -56,7 +68,7 @@ saveSettingsBtn.addEventListener('click', () => {
 // Extracted Data State
 let currentExtractedData = [];
 let targetExcelColumns = [
-    "Sıra No", "FATURA TARİHİ", "Fatura No", "ARAÇ MODELİ", "ARAÇ ŞASİ NO", "SİPARİŞ NO",
+    "Sıra No", "Düzenleyen Firma", "FATURA TARİHİ", "Fatura No", "ARAÇ MODELİ", "ARAÇ ŞASİ NO", "SİPARİŞ NO",
     "ARAÇ", "NAKLİYE", "OMS", "Alış Maliyeti Toplamı", "KDV Dahil Fatura Tutarı",
     "Vergiler Hariç Satış Tutarı", "Kampanya Tutarı", "FLEXCARE", "Satış Karı",
     "Kamp. Dahil Kar", "Kamp. Hariç Kar", "Müşteri Adı", "Satış Tarihi", "AÇIKLAMA"
@@ -100,6 +112,81 @@ toggleDebugBtn.addEventListener('click', () => {
 
 downloadBtn.addEventListener('click', generateExcel);
 
+// Viewer Event Listeners
+if(closeViewerBtn) {
+    closeViewerBtn.addEventListener('click', closeViewer);
+}
+
+if(viewerModal) {
+    viewerModal.addEventListener('click', (e) => {
+        if (e.target === viewerModal) { // Close if clicked on the overlay
+            closeViewer();
+        }
+    });
+}
+
+function openViewer(base64ImagesArray) {
+    if (!viewerModal || !viewerContent) return;
+
+    // Clear old content
+    viewerContent.innerHTML = '';
+
+    // Inject base64 images
+    base64ImagesArray.forEach((b64, index) => {
+        const img = document.createElement('img');
+        img.src = `data:image/jpeg;base64,${b64}`;
+        img.className = 'w-full max-w-4xl shadow-xl border border-slate-700 rounded-lg';
+        img.alt = `Invoice Page ${index+1}`;
+        viewerContent.appendChild(img);
+    });
+
+    viewerModal.classList.remove('hidden');
+    // Prevents body from scrolling
+    document.body.style.overflow = 'hidden'; 
+}
+
+function closeViewer() {
+    if (!viewerModal) return;
+    viewerModal.classList.add('hidden');
+    document.body.style.overflow = '';
+}
+
+// Load initial data on startup
+document.addEventListener("DOMContentLoaded", async () => {
+    await reloadTableFromDB();
+});
+
+async function reloadTableFromDB() {
+    tableBody.innerHTML = '';
+    currentExtractedData = [];
+    
+    try {
+        const keys = await db.keys();
+        if(keys.length > 0) {
+            resultsArea.classList.remove('hidden'); // Tablo her zaman görünür olacak
+            
+            // Veritabanındaki tüm faturaları sondan başa (en yeni) listeleyelim
+            let allInvoices = [];
+            for(let key of keys) {
+                const invoice = await db.getItem(key);
+                if(invoice) allInvoices.push(invoice);
+            }
+
+            // Metin olan "_savedAt" tarihlerine göre az önce kaydedilen yukarı çıksın diye basit çevirme
+            // Normalde epoch timestamp saklamak veritabanı id'leri için daha pürüzsüzdür ama idare ederiz.
+            allInvoices.reverse();
+
+            allInvoices.forEach((data, index) => {
+                data["Sıra No"] = index + 1; // UI'da dinamik sıra numarası ver
+                currentExtractedData.push(data);
+                displayRowResult(data);
+            });
+        }
+    } catch(e) {
+        console.error("Veritabanı okunurken hata:", e);
+    }
+}
+
 function handleDrop(e) {
     const dt = e.dataTransfer;
     const files = dt.files;
@@ -122,28 +209,20 @@ async function handleFiles(files) {
     uploadPrompt.classList.add('hidden');
     processingState.classList.remove('hidden');
     processingState.classList.add('flex');
-    resultsArea.classList.add('hidden');
-
-    // Clear previous extracts if any, so we only download what we just uploaded
-    currentExtractedData = [];
-    tableBody.innerHTML = '';
-    rawTextDisplay.innerHTML = '';
-
-    // Global row count tracking across multiple files and multiple pages
-    let globalRowIndex = 1;
-
+    
     try {
         if (!geminiApiKey) {
             alert('Lütfen sol panelden Google Gemini API Anahtarınızı giriniz.\nEğer yoksa Google AI Studio üzerinden ücretsiz alabilirsiniz.');
             return;
         }
 
+        // Global row count calculation logic omitted since reloadTableFromDB will reorder it post-save
         for (let idx = 0; idx < validFiles.length; idx++) {
             const file = validFiles[idx];
             processFilename.textContent = `[${idx + 1}/${validFiles.length}] Loading PDF: ${file.name}...`;
 
             // Process each page of the current file
-            globalRowIndex = await processPDFPagesToInvoices(file, idx, validFiles.length, globalRowIndex);
+            await processPDFPagesToInvoices(file, idx, validFiles.length);
         }
 
     } catch (error) {
@@ -154,34 +233,28 @@ async function handleFiles(files) {
         processingState.classList.add('hidden');
         processingState.classList.remove('flex');
         uploadPrompt.classList.remove('hidden');
-        if (currentExtractedData.length > 0) {
-            resultsArea.classList.remove('hidden');
-            resultsArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        
+        // Tabloyu veritabanından baştan kur
+        await reloadTableFromDB();
+        resultsArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 
-async function processPDFPagesToInvoices(file, fileIndex, totalFiles, currentRowIndex) {
+async function processPDFPagesToInvoices(file, fileIndex, totalFiles) {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-    // Helper sleep function for free tier API rate limits
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-    // Her dosya arasında minik bir bekleme (5 sn) kotayı rahatlatır
-    if (fileIndex > 0) {
-        processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Güvenlik molası (API Kotası)...`;
-        await sleep(5000);
-    }
-
     processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Toplam ${pdf.numPages} sayfa hazırlanıyor...`;
+
+    let allPagesBase64 = [];
+    let combinedRawText = "";
 
     for (let i = 1; i <= pdf.numPages; i++) {
         processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} görsele çevriliyor...`;
         const page = await pdf.getPage(i);
 
-        // Ölçeği 3.5'e çıkararak Google Gemini'in pikselleri (özellikle 8/3, Y/T) çok daha net okumasını sağlıyoruz
-        const viewport = page.getViewport({ scale: 3.5 });
+        // Hibrit okuma yaptığımız (raw text gönderdiğimiz) için scale 3.5'e gerek kalmadı. 2.0 yeterli (Hem base64 boyutu ufalır hem hızlı çalışır)
+        const viewport = page.getViewport({ scale: 2.0 });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         canvas.height = viewport.height;
@@ -193,62 +266,145 @@ async function processPDFPagesToInvoices(file, fileIndex, totalFiles, currentRow
         }).promise;
 
         const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-
-        // Her sayfayı ayrı ayrı göndererek diğer sayfaların şasilerinin ezberlenmesini (halüsinasyonu) önlüyoruz
-        processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} Yapay Zeka'ya okutuluyor...`;
-        const extractedJsonString = await callGeminiAPI([base64]);
-
-        // Log to raw text view for debugging
-        rawTextDisplay.innerHTML += `\n--- START ${file.name} (Sayfa ${i}) ---\n${extractedJsonString}\n--- END ${file.name} (Sayfa ${i}) ---\n`;
-
-        // Parse JSON safely
-        const parsedDataArray = parseGeminiJSON(extractedJsonString);
-
-        parsedDataArray.forEach(parsedData => {
-            parsedData["Sıra No"] = currentRowIndex;
-            currentExtractedData.push(parsedData);
-            displayRowResult(parsedData);
-            currentRowIndex++;
-        });
-
-        // Sayfalar arasında kotayı (429 Too Many Requests) doldurmamak için küçük molalar ver
-        if (i < pdf.numPages) {
-            processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Sayfa ${i}/${pdf.numPages} okundu. API Molası (3sn)...`;
-            await sleep(3000);
-        }
+        allPagesBase64.push(base64);
+        
+        // Dijital PDF'in içindeki saf metni (Raw Text) çıkarma
+        const textContent = await page.getTextContent();
+        const rawText = textContent.items.map(item => item.str).join(' ');
+        
+        // Metinleri birleştirirken sayfa ayracı koyalım ki yapay zeka kafası karışmasın
+        combinedRawText += `\n\n--- [SAYFA ${i} BAŞLANGICI] ---\n${rawText}\n--- [SAYFA ${i} SONU] ---\n`;
     }
 
-    return currentRowIndex;
+    // Tüm sayfalar toplandıktan sonra TEK BİR defada Yapay Zeka'ya yollanıyor (Batch Process)
+    processFilename.textContent = `[Dosya ${fileIndex + 1}/${totalFiles}] - Tüm sayfalar Yapay Zeka'ya (Batch) gönderiliyor...`;
+    
+    // API Call
+    const extractedJsonString = await callGeminiAPI(allPagesBase64, combinedRawText);
+
+    // Log to raw text view for debugging
+    rawTextDisplay.innerHTML += `\n--- START ${file.name} (BATCH) ---\n[COMBINED RAW TEXT]:\n${combinedRawText}\n\n[JSON OUTPUT]:\n${extractedJsonString}\n--- END ${file.name} (BATCH) ---\n`;
+
+    // Parse JSON safely
+    const parsedDataArray = parseGeminiJSON(extractedJsonString);
+
+    let duplicatesFound = 0;
+
+    for (let parsedData of parsedDataArray) {
+        // Kontrol 1: Hem fatura numarası hem de Firma boşsa bu muhtemelen sahte veya hatalı satırdır, yoksay
+        const fNoStr = (parsedData["Fatura No"] || "").trim().toUpperCase();
+        const firmaStr = (parsedData["Düzenleyen Firma"] || "").trim().toUpperCase();
+
+        if(!fNoStr && !firmaStr) continue;
+
+        // Kontrol 2: Veritabanında (LocalForage) firma_faturaNo anahtarına bak
+        // Böylece Firma ve Fatura No aynı anda aynı geldiğinde mükerrere düşer
+        const dbKey = `${firmaStr}_${fNoStr}`;
+        const existingInvoice = await db.getItem(dbKey);
+
+        if (existingInvoice) {
+            console.warn(`[Mükerrer Kayıt Atlandı] Firma: ${firmaStr}, Fatura: ${fNoStr}`);
+            duplicatesFound++;
+            continue; // Atla ve listeye ekleme
+        }
+
+        // Mükerrer değilse ve geçerliyse:
+        // Hangi sayfalarda bulunduğunu çıkarıp sadece o sayfaların resimlerini ekleyelim
+        let targetImages = allPagesBase64;
+        const pageNumbers = parsedData["Bulunduğu Sayfa"];
+        
+        if (pageNumbers !== undefined && pageNumbers !== null) {
+            // Gemini might return a single number instead of an array sometimes, or an array of numbers
+            const pagesArray = Array.isArray(pageNumbers) ? pageNumbers : [pageNumbers];
+            
+            if (pagesArray.length > 0) {
+                targetImages = [];
+                pagesArray.forEach(pageNum => {
+                    const parsedNum = parseInt(pageNum);
+                    if (!isNaN(parsedNum)) {
+                        const pIndex = parsedNum - 1; // 1-based to 0-based
+                        if (pIndex >= 0 && pIndex < allPagesBase64.length) {
+                            targetImages.push(allPagesBase64[pIndex]);
+                        }
+                    }
+                });
+            }
+        }
+        
+        // Güvenlik (Fallback): Eğer hatalı bir sayfa basıldıysa veya dizi boş kaldıysa orijinali koru
+        if (targetImages.length === 0) {
+            console.warn(`[Page Mapping Failed] Gemini didn't return valid page numbers for invoice ${fNoStr}. Falling back to all pages. Value received:`, pageNumbers);
+            targetImages = allPagesBase64;
+        } else {
+            console.log(`[Page Mapping Success] Invoice ${fNoStr} mapped to ${targetImages.length} specific page(s).`);
+        }
+
+        parsedData._sourceImages = targetImages; 
+
+        // Kaydedilme tarihini meta olarak atalım
+        const today = new Date();
+        parsedData._savedAt = today.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+        // Veritabanına Kalıcı (Local) Kaydet
+        await db.setItem(dbKey, parsedData);
+    }
+
+    if(duplicatesFound > 0) {
+        processFilename.textContent = `İşlem Bitti. ${duplicatesFound} adet fatura daha önce okunduğu için atlandı (Mükerrer).`;
+    } else {
+        processFilename.textContent = `Tüm kayıtlar başarıyla çıkarıldı ve veritabanına kaydedildi.`;
+    }
 }
 
-async function callGeminiAPI(base64ImagesArray) {
-    const prompt = `Sen uzman bir fatura veri çıkarıcı yapay zekasın.
-Girdi olarak BİR ADET fatura sayfası görüntüsü alacaksın.
-Senin görevin bu görseldeki verileri DİKKATLİCE VE HARF HARF okuyup, bunları bir JSON DİZİSİ (Array) içerisinde döndürmek.
-DİKKAT: Gizli mantık veya tahmin (halüsinasyon) yürütme! Görselden tam olarak ne okuyorsan onu yaz, harf yutma veya baştan harf atma.
-Eksiksiz ve birebir aynı formatta çıkararak cevap vermelisin. 
-Hiçbir ekstra metin, açıklama veya markdown satırı ekleme; DOĞRUDAN geçerli bir JSON DİZİSİ (Array) objesi olarak cevap ver. Asla \`\`\`json blokları kullanma.
-Beklenen Çıktı Formatı (Sayfa başına dizi içinde BİR adet obje olmalı):
-[
-  {
-    "FATURA TARİHİ": "Sadece tarihi GG.AA.YYYY yaz",
-    "Fatura No": "Kısa fatura numarası (varsa)",
-    "eFatura No": "16 haneli tam kod. 'NS' ile başlar. DİKKAT: 8 rakamını 3 ile KESİNLİKLE karıştırma! (Örneğin ...28511 okuman gerekirken hata yapıp ...23511 diye yazma).",
-    "ARAÇ MODELİ": "Aracın sadece tam adı ve modeli",
-    "ARAÇ ŞASİ NO": "Tam 17 karakterli araç şasi numarası. DİKKAT: Hiçbir harfi atlama! (Örneğin EDYHZ0TN... yerine EDYZ0TN... yazma, VR3USHPY7TJ... yerine VR3USHPTYJ... uydurma). Görseli harf harf optik olarak tara.",
-    "SİPARİŞ NO": "Sipariş No (C202... tarzı numaralar)",
-    "Alış Maliyeti Toplamı": "Vergiler hariç MATRAH tutarı (Sadece sayı, noktasız ve küsürat virgüllü: 1076938,70 gibi)",
-    "KDV Dahil Fatura Tutarı": "Genel toplam/Fatura Tutarı (Sadece sayı, örn: 1292326,44)",
-    "Vergiler Hariç Satış Tutarı": "Alış Maliyeti Toplamı ile aynı değeri koy",
-    "KDV Tutarı": "%20 KDV tutarının rakamı (Sadece sayı)",
-    "Müşteri Adı": "Fatura Alıcısı kısmındaki müşteri ünvanı/adı"
-  }
-]`;
+async function callGeminiAPI(base64ImagesArray, pageText = "") {
+    const systemInstruction = `Sen uzman bir fatura veri çıkarıcı yapay zekasın.
+Girdi olarak bir fatura dosyasının TÜM SAYFALARININ resimlerini DİZİ (Batch) olarak ve birleştirilmiş dijital metni (Raw Text) alacaksın.
+Görevlerin: 
+1. Tüm sayfalardaki verileri ve metinleri BÜTÜNSEL Olarak değerlendirip, fatura içindeki GEÇERLİ kalemleri/araçları çıkartmak.
+2. Sadece faturada gerçekten yazan fiyatları almak. "Vergiler Hariç Satış Tutarı" isteniyorsa ve faturada net "Alış Maliyeti" varsa onu yansıt.
+3. Özellikle "ARAÇ ŞASİ NO", "Fatura No" ve "eFatura No" gibi verilerde Raw Text'teki metne öncelik ver ve OCR hatası yapma (O harfini 0, veya 8 rakamını 3 okuma).
+4. Raw Text içinde "--- [SAYFA X BAŞLANGICI] ---" gibi sayfa belirteçleri var. Lütfen bulduğun ilgili faturanın HANGİ SAYFADA/SAYFALARDA yer aldığını da doğru bir şekilde belirt.
+Gizli mantık veya tahmin (halüsinasyon) yürütme. Eğer bir faturada birden çok fatura detayı/araç varsa her biri için ayrı bir JSON objesi dön.`;
+
+    const promptText = `Aşağıda PDF'ten çıkarılan BİRLEŞTİRİLMİŞ "Raw Text" metni bulunmaktadır. Faturanın görselleri de sayfalar sırasıyla ektedir.
+Verileri dikkatlice PDF sayfaları boyunca tarayıp çıkarın. Lütfen faturayı çıkartırken Raw Text içinden kaçıncı sayfada olduğuna özellikle dikkat edin.
+
+COMBINED RAW TEXT:
+${pageText}`;
+
+    // Yeni Schema (Structured Output) özelliği
+    const schema = {
+        type: "ARRAY",
+        description: "Fatura satırlarını içeren liste",
+        items: {
+            type: "OBJECT",
+            properties: {
+                "Düzenleyen Firma": { type: "STRING", description: "Faturayı kesen/satıcı firmanın ünvanı (Örn: STELLANTİS)" },
+                "FATURA TARİHİ": { type: "STRING", description: "Sadece tarihi GG.AA.YYYY formatında yaz" },
+                "Fatura No": { type: "STRING", description: "Kısa fatura numarası" },
+                "eFatura No": { type: "STRING", description: "16 haneli e-fatura numarası. Örneğin NS.. ile başlar. Raw Text'e dikkat et." },
+                "ARAÇ MODELİ": { type: "STRING", description: "Aracın tam adı ve modeli" },
+                "ARAÇ ŞASİ NO": { type: "STRING", description: "17 karakterli tam şasi numarası. Asla harf uydurma veya atlama. Raw Text'ten doğrula." },
+                "SİPARİŞ NO": { type: "STRING", description: "Sipariş numarası (Siparişi yansıt)" },
+                "Alış Maliyeti Toplamı": { type: "STRING", description: "Vergiler hariç MATRAH tutarı (Sadece sayı ve virgül, örn: 1076938,70)" },
+                "KDV Dahil Fatura Tutarı": { type: "STRING", description: "Genel Toplam (Sadece sayı, örn: 1292326,44)" },
+                "Vergiler Hariç Satış Tutarı": { type: "STRING", description: "Alış Maliyeti Toplamı ile aynı değeri koy" },
+                "KDV Tutarı": { type: "STRING", description: "Hesaplanan KDV Tutarı (Sadece sayı)" },
+                "Müşteri Adı": { type: "STRING", description: "Fatura alıcısı / Müşteri adı ünvanı" },
+                "Bulunduğu Sayfa": { 
+                    type: "ARRAY", 
+                    description: "Bu faturanın PDF içinde bulunduğu MANTIKLI sayfa numarası / numaraları (sadece rakam, örn: [1] veya [3, 4])",
+                    items: { type: "INTEGER" }
+                }
+            },
+            required: ["ARAÇ ŞASİ NO", "KDV Dahil Fatura Tutarı", "Bulunduğu Sayfa"]
+        }
+    };
 
     let url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
 
     // Dizinin yapısını tek bir array objesinde sunucuya ilet
-    const requestParts = [{ text: prompt }];
+    const requestParts = [{ text: promptText }];
     base64ImagesArray.forEach(b64 => {
         requestParts.push({
             inline_data: { mime_type: "image/jpeg", data: b64 }
@@ -256,12 +412,16 @@ Beklenen Çıktı Formatı (Sayfa başına dizi içinde BİR adet obje olmalı):
     });
 
     const requestBody = {
+        systemInstruction: {
+            parts: [{ text: systemInstruction }]
+        },
         contents: [{
             parts: requestParts
         }],
         generationConfig: {
-            temperature: 0.1, // Deterministic
-            response_mime_type: "application/json" // Force JSON array 
+            temperature: 0.0, // Tam deterministik
+            responseMimeType: "application/json",
+            responseSchema: schema
         }
     };
 
@@ -427,6 +587,7 @@ function parseGeminiJSON(jsonString) {
     const mapDataToRow = (item) => {
         return {
             "Sıra No": "1",
+            "Düzenleyen Firma": item["Düzenleyen Firma"] || "",
             "FATURA TARİHİ": item["FATURA TARİHİ"] || "",
             // Spesyifik 8 rakamının 3 okunması (23511 -> 28511) hatasını koda gömülü düzeltme
             "Fatura No": (item["eFatura No"] || item["Fatura No"] || "").replace(/23511$/, "28511"), 
@@ -461,6 +622,7 @@ function parseGeminiJSON(jsonString) {
             "Kamp. Dahil Kar": "",
             "Kamp. Hariç Kar": "",
             "Müşteri Adı": item["Müşteri Adı"] || "",
+            "Bulunduğu Sayfa": item["Bulunduğu Sayfa"] || [],
             "Satış Tarihi": "",
             "AÇIKLAMA": ""
         };
@@ -476,10 +638,10 @@ function parseGeminiJSON(jsonString) {
 function displayRowResult(data) {
     // Show one row at a time in the table view (only a few key fields to keep UI clean during batches)
     const tr = document.createElement('tr');
-    tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors';
+    tr.className = 'border-b border-white/5 hover:bg-white/5 transition-colors group';
 
     // To prevent cluttering the screen with 20 columns for 50 files, we just show a summary row
-    const keysToShow = ["Fatura No", "ARAÇ ŞASİ NO", "KDV Dahil Fatura Tutarı"];
+    const keysToShow = ["Düzenleyen Firma", "FATURA TARİHİ", "Fatura No", "KDV Dahil Fatura Tutarı"];
 
     // Add Row index
     let tdIndex = document.createElement('td');
@@ -490,28 +652,98 @@ function displayRowResult(data) {
     keysToShow.forEach(key => {
         const tdValue = document.createElement('td');
         tdValue.className = 'px-6 py-4 text-emerald-400 font-semibold';
-        tdValue.textContent = data[key] || "-";
+        
+        let displayValue = data[key] || "-";
+        
+        // Ekranda gösterim (UI) için TL formatına çevirme (Excel saf verisini bozmaz)
+        if (key === "KDV Dahil Fatura Tutarı" && data[key]) {
+            const numVal = parseFloat(data[key].toString().replace(',', '.')); // Güvenlik için string'se düzelt
+            if (!isNaN(numVal)) {
+                displayValue = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(numVal);
+            }
+        }
+        
+        tdValue.textContent = displayValue;
         tr.appendChild(tdValue);
     });
 
-    tableBody.appendChild(tr);
-}
-
-function generateExcel() {
-    if (!currentExtractedData || currentExtractedData.length === 0) return;
-
-    // Ensure all target columns exist in the row even if empty
-    const exportData = currentExtractedData.map(row => {
-        const newRow = {};
-        targetExcelColumns.forEach(col => {
-            newRow[col] = row[col] || "";
-        });
-        return newRow;
+    // Add "View & Delete" Action Buttons
+    const tdAction = document.createElement('td');
+    tdAction.className = 'px-6 py-4 text-right flex justify-end gap-2';
+    
+    // View Button
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'p-2 bg-indigo-500/10 hover:bg-indigo-500/30 text-indigo-400 rounded-lg transition-all border border-indigo-500/20 shadow-sm';
+    viewBtn.innerHTML = `<i data-lucide="eye" class="w-4 h-4"></i>`;
+    viewBtn.title = "Faturayı Gör";
+    
+    viewBtn.addEventListener('click', () => {
+        if(data._sourceImages && Array.isArray(data._sourceImages)) {
+            openViewer(data._sourceImages);
+        } else {
+            alert("Bu satır için orijinal fatura görseli hafızada bulunamadı.");
+        }
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData, { header: targetExcelColumns });
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Invoice Data");
+    // Delete Button
+    const delBtn = document.createElement('button');
+    delBtn.className = 'p-2 bg-red-500/10 hover:bg-red-500/30 text-red-500 rounded-lg transition-all border border-red-500/20 shadow-sm opacity-50 hover:opacity-100';
+    delBtn.innerHTML = `<i data-lucide="trash-2" class="w-4 h-4"></i>`;
+    delBtn.title = "Veritabanından Sil";
+    
+    delBtn.addEventListener('click', async () => {
+        if(confirm(`"${data["Fatura No"]}" kalıcı olarak silinecek. Onaylıyor musunuz?`)) {
+            const fNoStr = (data["Fatura No"] || "").trim().toUpperCase();
+            const firmaStr = (data["Düzenleyen Firma"] || "").trim().toUpperCase();
+            const dbKey = `${firmaStr}_${fNoStr}`;
+            
+            await db.removeItem(dbKey);
+            await reloadTableFromDB(); // UI Refresh
+        }
+    });
 
-    XLSX.writeFile(workbook, "Parsed_Invoice_Gravity.xlsx");
+    tdAction.appendChild(viewBtn);
+    tdAction.appendChild(delBtn);
+    tr.appendChild(tdAction);
+
+    tableBody.appendChild(tr);
+
+    // Re-initialize lucide icons inside the new row since we injected HTML dynamically
+    if (window.lucide) {
+        window.lucide.createIcons();
+    }
+}
+
+async function generateExcel() {
+    try {
+        const keys = await db.keys();
+        if(keys.length === 0) {
+            alert("İndirilecek fatura bulunmuyor.");
+            return;
+        }
+
+        let dbData = [];
+        for(let key of keys) {
+            const invoice = await db.getItem(key);
+            if(invoice) dbData.push(invoice);
+        }
+
+        // Export mantığı (Sıra noları baştan dizelim düzgün görünsün)
+        const exportData = dbData.map((row, index) => {
+            const newRow = {};
+            targetExcelColumns.forEach(col => {
+                if(col === "Sıra No") newRow[col] = index + 1;
+                else newRow[col] = row[col] || "";
+            });
+            return newRow;
+        });
+
+        const worksheet = XLSX.utils.json_to_sheet(exportData, { header: targetExcelColumns });
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Fatura Kayıtları");
+        XLSX.writeFile(workbook, "Gravity_Fatura_DB.xlsx");
+
+    } catch (e) {
+        console.error("Excel indirilirken hata:", e);
+    }
 }

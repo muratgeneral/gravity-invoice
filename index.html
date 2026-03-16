@@ -18,6 +18,9 @@
 
     <!-- SheetJS for Excel export -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
+    <!-- LocalForage for easy IndexedDB usage (Persistent Storage) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
 </head>
 
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500/30">
@@ -99,28 +102,30 @@
         </div>
 
         <!-- Results Area -->
-        <div id="results-area" class="hidden mt-8 w-full max-w-4xl mx-auto space-y-6 animate-fade-in fade-in-up">
-            <div class="bg-slate-900 border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+        <div id="results-area" class="w-full max-w-4xl mx-auto space-y-6 animate-fade-in fade-in-up">
+            <div class="bg-slate-900 border border-white/10 rounded-2xl overflow-hidden shadow-2xl relative">
                 <div class="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-slate-800/50">
                     <h2 class="text-xl font-semibold text-white flex items-center gap-2">
-                        <i data-lucide="check-circle" class="w-5 h-5 text-emerald-400"></i>
-                        Extraction Successful
+                        <i data-lucide="database" class="w-5 h-5 text-emerald-400"></i>
+                        Fatura Kayıtları
                     </h2>
                     <button id="download-btn"
-                        class="bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-400 hover:to-purple-400 text-white px-5 py-2 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-indigo-500/25 flex items-center gap-2">
+                        class="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white px-5 py-2 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-emerald-500/25 flex items-center gap-2">
                         <i data-lucide="download" class="w-4 h-4"></i>
-                        Download Excel
+                        Tümünü (Excel) İndir
                     </button>
                 </div>
                 <!-- Data Summary Preview -->
-                <div class="overflow-x-auto max-h-96">
+                <div class="overflow-x-auto max-h-96 min-h-[12rem] relative">
                     <table class="w-full text-left border-collapse">
-                        <thead class="bg-slate-800 text-slate-400 text-sm sticky top-0">
+                        <thead class="bg-slate-800 text-slate-400 text-sm sticky top-0 z-10">
                             <tr>
                                 <th class="px-6 py-3 font-medium">Satır</th>
+                                <th class="px-6 py-3 font-medium">Firma</th>
+                                <th class="px-6 py-3 font-medium">Tarih</th>
                                 <th class="px-6 py-3 font-medium">Fatura No</th>
-                                <th class="px-6 py-3 font-medium">Şasi No</th>
-                                <th class="px-6 py-3 font-medium">KDV Dahil Tutar</th>
+                                <th class="px-6 py-3 font-medium">Tutar</th>
+                                <th class="px-6 py-3 font-medium">İşlem</th>
                             </tr>
                         </thead>
                         <tbody id="extracted-data-table" class="text-sm divide-y divide-white/5">
@@ -199,6 +204,35 @@
                     Kaydet ve Kapat
                 </button>
             </div>
+        </div>
+    </div>
+
+    <!-- Document Viewer Modal -->
+    <div id="viewer-modal"
+        class="hidden fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 sm:p-6 fade-in-up">
+        <div class="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-5xl h-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden relative group">
+            
+            <!-- Viewer Header -->
+            <div class="p-4 border-b border-white/10 flex justify-between items-center bg-slate-800/80 backdrop-blur-sm sticky top-0 z-10 w-full relative">
+                <div class="flex items-center gap-3">
+                    <div class="p-2 bg-indigo-500/20 rounded-lg text-indigo-400">
+                        <i data-lucide="file-image" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-white">Orijinal Fatura Görüntüsü</h3>
+                        <p class="text-xs text-slate-400">Çıkarılan verilerin kaynağı</p>
+                    </div>
+                </div>
+                <button id="close-viewer-btn" class="p-2 bg-slate-800 hover:bg-red-500/20 hover:text-red-400 border border-white/5 rounded-full text-slate-400 transition-all duration-300">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Viewer Content (Scrollable Images) -->
+            <div class="flex-grow overflow-y-auto p-4 sm:p-8 bg-[#1e293b] flex flex-col items-center gap-6" id="viewer-content">
+                <!-- Images will be injected here dynamically -->
+            </div>
+
         </div>
     </div>
 
